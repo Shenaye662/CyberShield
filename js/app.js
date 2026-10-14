@@ -1,1711 +1,1007 @@
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+"use strict";
 
-:root {
-    --bg: #090b18;
-    --sidebar: #0c0e1d;
-    --panel: #111427;
-    --panel-hover: #171b32;
-    --border: #252943;
-    --text: #f1f2ff;
-    --muted: #9096b2;
-    --purple: #a78bfa;
-    --purple-bright: #8b5cf6;
-    --cyan: #45d8e8;
-    --green: #45d6a0;
-    --orange: #ffad66;
-    --red: #ff6b83;
-    --yellow: #f5d46c;
-    --radius: 15px;
-}
+document.addEventListener("DOMContentLoaded", function() {
+    const $ = (selector) => document.querySelector(selector);
+    const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
-* {
-    box-sizing: border-box;
-}
+    const STORAGE_KEY = "cybershield_incidents_v1";
+    const QUIZ_KEY = "cybershield_quiz_v1";
 
-body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: Inter, "Segoe UI", sans-serif;
-    font-size: 13px;
-    line-height: 1.6;
-}
+    const priorities = ["Critical", "High", "Medium", "Low"];
+    const statuses = ["Open", "In Progress", "Resolved"];
 
-button, input, textarea, select {
-    font: inherit;
-}
+    let incidents = loadIncidents();
+    let toastTimer;
+    let editingIncidentId = null;
 
-button {
-    cursor: pointer;
-}
+    // --------------------------------------------------
+    // SAFE HTML HELPERS
+    // --------------------------------------------------
 
-    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
-        outline: 2px solid var(--purple);
-        outline-offset: 3px;
+    function escapeHTML(value) {
+        return String(value ?? "").replace(/[&<>"']/g, function(character) {
+            return {
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;"
+            }[character];
+        });
     }
 
-    button:disabled {
-        opacity: .45;
-        cursor: not-allowed;
+    function makeId() {
+        return "INC-" + Date.now().toString(36).toUpperCase()
+            + "-" + Math.random().toString(36).slice(2, 6).toUpperCase();
     }
 
-a {
-    color: inherit;
-    text-decoration: none;
-}
-
-p {
-    color: var(--muted);
-    margin: 6px 0 0;
-}
-
-h1, h2, h3 {
-    margin: 0;
-    line-height: 1.35;
-}
-
-h1 {
-    font-size: clamp(23px, 2.5vw, 29px);
-    letter-spacing: -.8px;
-}
-
-h2 {
-    font-size: 15px;
-    font-weight: 700;
-}
-
-h3 {
-    font-size: 13px;
-}
-
-strong {
-    font-weight: 650;
-}
-
-.hidden {
-    display: none !important;
-}
-
-.purple {
-    color: var(--purple);
-}
-
-.app-shell {
-    min-height: 100vh;
-}
-
-.sidebar {
-    width: 252px;
-    background: var(--sidebar);
-    border-right: 1px solid var(--border);
-    position: fixed;
-    inset: 0 auto 0 0;
-    display: flex;
-    flex-direction: column;
-    padding: 25px 16px 16px;
-    z-index: 20;
-}
-
-.brand {
-    display: flex;
-    align-items: center;
-    gap: 11px;
-    padding: 0 10px 34px;
-    font-size: 20px;
-    font-weight: 800;
-    letter-spacing: -.7px;
-}
-
-.brand-icon {
-    display: grid;
-    place-items: center;
-    width: 41px;
-    height: 41px;
-    border-radius: 12px;
-    background: linear-gradient(145deg, #8b5cf6, #5635bc);
-    box-shadow: 0 0 25px #8b5cf633;
-    font-size: 22px;
-}
-
-.brand small {
-    display: block;
-    font-size: 8px;
-    color: var(--muted);
-    letter-spacing: 1.6px;
-    font-weight: 600;
-    margin-top: 1px;
-}
-
-.nav-label, .eyebrow {
-    color: #8b91ae;
-    font-size: 10px;
-    letter-spacing: 1.5px;
-    font-weight: 750;
-}
-
-.nav-label {
-    padding: 0 13px 12px;
-}
-
-.navigation {
-    display: grid;
-    gap: 5px;
-}
-
-.nav-link {
-    width: 100%;
-    min-height: 45px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    text-align: left;
-    padding: 10px 13px;
-    color: #a4a9c3;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 9px;
-    transition: .2s ease;
-}
-
-    .nav-link > span:first-child {
-        width: 19px;
-        font-size: 18px;
-        text-align: center;
+    function formatDate(dateString) {
+        const date = new Date(dateString);
+        if (Number.isNaN(date.getTime())) return "Unknown";
+        return date.toLocaleDateString("en-ZA", {
+            day: "2-digit", month: "short", year: "numeric"
+        });
     }
 
-    .nav-link:hover {
-        color: var(--text);
-        background: #171a30;
+    function showToast(message) {
+        const toast = $("#toast");
+        toast.textContent = message;
+        toast.classList.add("show");
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove("show"), 3000);
     }
 
-    .nav-link.active {
-        color: #d8ccff;
-        background: linear-gradient(90deg, #8b5cf626, #8b5cf609);
-        border-color: #8b5cf633;
-        box-shadow: inset 3px 0 var(--purple-bright);
+    function saveIncidents() {
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(incidents));
+            return true;
+        } catch (error) {
+            showToast("Could not save data. Browser storage may be full or unavailable.");
+            console.error("Incident storage error:", error);
+            return false;
+        }
     }
 
-.nav-count {
-    margin-left: auto;
-    font-size: 10px;
-    padding: 1px 7px;
-    background: #27203f;
-    border-radius: 6px;
-    color: var(--purple);
-}
-
-.sidebar-bottom {
-    margin-top: auto;
-}
-
-.system-status {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    padding: 14px 10px;
-    margin-bottom: 17px;
-    border: 1px solid #27352f;
-    background: #14221f;
-    border-radius: 10px;
-}
-
-.status-dot {
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--green);
-    box-shadow: 0 0 9px #45d6a077;
-    flex-shrink: 0;
-}
-
-.system-status strong, .user-profile strong {
-    display: block;
-    font-size: 10px;
-}
-
-.system-status small, .user-profile small {
-    display: block;
-    font-size: 10px;
-    color: var(--muted);
-    margin-top: 3px;
-}
-
-.user-profile {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    border-top: 1px solid var(--border);
-    padding: 18px 5px 3px;
-}
-
-.avatar {
-    display: grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    border-radius: 10px;
-    background: linear-gradient(135deg, #8b5cf6, #42328b);
-    color: white;
-    font-size: 11px;
-    font-weight: 800;
-    flex-shrink: 0;
-}
-
-.profile-dots {
-    margin-left: auto;
-    color: var(--muted);
-}
-
-.main-content {
-    margin-left: 252px;
-    min-height: 100vh;
-}
-
-.topbar {
-    height: 75px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    padding: 0 32px;
-    border-bottom: 1px solid var(--border);
-    background: #0c0e1dee;
-}
-
-.topbar-left, .topbar-right {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-}
-
-.breadcrumb {
-    font-size: 11px;
-    color: var(--muted);
-}
-
-    .breadcrumb span {
-        color: var(--text);
-    }
-
-.live-label {
-    font-size: 9px;
-    color: #a7b2c5;
-    margin-top: 4px;
-    letter-spacing: .7px;
-}
-
-    .live-label .status-dot {
-        margin-right: 5px;
-        width: 6px;
-        height: 6px;
-    }
-
-.environment-tag {
-    border: 1px solid #8b5cf640;
-    color: var(--purple);
-    border-radius: 5px;
-    padding: 4px 8px;
-    font-size: 9px;
-    letter-spacing: .8px;
-    font-weight: 750;
-}
-
-.icon-button, .menu-toggle {
-    border: 1px solid var(--border);
-    background: var(--panel);
-    color: #c4c8dd;
-    width: 34px;
-    height: 34px;
-    border-radius: 9px;
-}
-
-    .icon-button:hover {
-        border-color: var(--purple);
-        color: white;
-    }
-
-.menu-toggle {
-    display: none;
-}
-
-.page-container {
-    padding: 29px 32px 18px;
-    max-width: 1700px;
-    margin: auto;
-}
-
-.page {
-    display: none;
-    animation: appear .22s ease;
-}
-
-    .page.active {
-        display: block;
-    }
-
-@keyframes appear {
-    from {
-        opacity: .5;
-        transform: translateY(4px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.page-heading {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 20px;
-    margin-bottom: 24px;
-}
-
-    .page-heading .eyebrow {
-        margin-bottom: 6px;
-    }
-
-    .page-heading p {
-        font-size: 12px;
-    }
-
-.button {
-    border-radius: 8px;
-    border: 1px solid transparent;
-    padding: 10px 15px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    font-size: 11px;
-    font-weight: 700;
-    transition: .2s ease;
-    white-space: nowrap;
-}
-
-    .button.primary {
-        color: #fff;
-        background: linear-gradient(135deg, #8b5cf6, #7044dc);
-        box-shadow: 0 4px 18px #8b5cf625;
-    }
-
-        .button.primary:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 5px 24px #8b5cf64a;
+    function loadIncidents() {
+        try {
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if (saved !== null) {
+                const parsed = JSON.parse(saved);
+                if (!Array.isArray(parsed)) return [];
+                return parsed.filter(item =>
+                    item && typeof item.id === "string"
+                    && typeof item.title === "string"
+                    && priorities.includes(item.priority)
+                    && statuses.includes(item.status)
+                );
+            }
+        } catch (error) {
+            console.error("Could not read saved incidents:", error);
         }
 
-    .button.secondary {
-        background: #171a2d;
-        border-color: var(--border);
-        color: #c2c6dc;
+        // Initial sample data makes the dashboard useful on first launch.
+        // These records are fictional and can be edited or deleted.
+        const now = Date.now();
+        return [
+            {
+                id: "INC-1001", title: "Suspicious login attempt",
+                description: "Fictional example: several failed sign-in attempts.",
+                priority: "High", status: "Open",
+                createdAt: new Date(now - 3600000).toISOString()
+            },
+            {
+                id: "INC-1002", title: "Possible phishing email",
+                description: "Fictional example: email requests urgent account verification.",
+                priority: "Critical", status: "In Progress",
+                createdAt: new Date(now - 7200000).toISOString()
+            },
+            {
+                id: "INC-1003", title: "Unusual network activity",
+                description: "Fictional example: unusual activity flagged for review.",
+                priority: "Medium", status: "Open",
+                createdAt: new Date(now - 86400000).toISOString()
+            },
+            {
+                id: "INC-1004", title: "Security awareness review",
+                description: "Fictional example: awareness training completed.",
+                priority: "Low", status: "Resolved",
+                createdAt: new Date(now - 172800000).toISOString()
+            }
+        ];
     }
 
-        .button.secondary:hover {
-            border-color: #8b5cf677;
-            color: white;
+    function priorityClass(priority) {
+        return "priority-" + priority.toLowerCase();
+    }
+
+    function statusClass(status) {
+        return "status-" + status.toLowerCase().replace(/\s+/g, "-");
+    }
+
+    function priorityBadge(priority) {
+        return `<span class="priority ${priorityClass(priority)}">${escapeHTML(priority)}</span>`;
+    }
+
+    function statusBadge(status) {
+        return `<span class="status-badge ${statusClass(status)}">${escapeHTML(status)}</span>`;
+    }
+
+    // --------------------------------------------------
+    // NAVIGATION
+    // --------------------------------------------------
+
+    const pageNames = {
+        dashboard: "Overview",
+        phishing: "Phishing Detector",
+        password: "Password Checker",
+        incidents: "Incident Management",
+        academy: "Cyber Academy"
+    };
+
+    function navigate(pageName) {
+        if (!pageNames[pageName]) return;
+
+        $$(".page").forEach(page => page.classList.remove("active"));
+        const target = $("#page-" + pageName);
+        if (target) target.classList.add("active");
+
+        $$(".nav-link").forEach(link => {
+            link.classList.toggle("active", link.dataset.page === pageName);
+        });
+
+        $("#breadcrumb").textContent = pageNames[pageName];
+        $("#sidebar").classList.remove("open");
+        window.scrollTo({ top: 0, behavior: "smooth" });
+
+        if (pageName === "dashboard" || pageName === "incidents") {
+            renderIncidents();
+        }
+    }
+
+    document.addEventListener("click", function(event) {
+        const pageButton = event.target.closest("[data-page]");
+        if (pageButton) {
+            event.preventDefault();
+            navigate(pageButton.dataset.page);
         }
 
-    .button.small {
-        padding: 7px 11px;
-    }
-
-.notice {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 14px 16px;
-    background: #17152a;
-    border: 1px solid #44356c;
-    border-radius: 10px;
-    margin-bottom: 22px;
-    color: var(--purple);
-}
-
-    .notice > span {
-        font-size: 17px;
-        line-height: 1.4;
-    }
-
-    .notice strong {
-        color: #e1d8ff;
-        font-size: 11px;
-    }
-
-    .notice p {
-        font-size: 11px;
-        line-height: 1.6;
-        margin-top: 3px;
-    }
-
-.compact-notice {
-    padding: 12px;
-    margin: 20px 0 0;
-}
-
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 15px;
-    margin-bottom: 20px;
-}
-
-.stat-card, .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-}
-
-.stat-card {
-    padding: 18px 19px;
-    min-width: 0;
-}
-
-.stat-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-    color: #a3a9c3;
-    font-size: 11px;
-}
-
-.stat-icon, .quick-icon {
-    display: grid;
-    place-items: center;
-    border-radius: 9px;
-    width: 34px;
-    height: 34px;
-    flex-shrink: 0;
-    font-size: 16px;
-}
-
-.violet {
-    color: var(--purple);
-    background: #8b5cf61c;
-}
-
-.cyan {
-    color: var(--cyan);
-    background: #45d8e81a;
-}
-
-.green {
-    color: var(--green);
-    background: #45d6a019;
-}
-
-.orange {
-    color: var(--orange);
-    background: #ffad661b;
-}
-
-.red {
-    color: var(--red);
-    background: #ff6b831a;
-}
-
-.stat-number {
-    font-size: 29px;
-    font-weight: 750;
-    letter-spacing: -1px;
-    margin-top: 9px;
-    line-height: 1.3;
-}
-
-.stat-foot {
-    font-size: 10px;
-    color: #777f9e;
-    margin-top: 7px;
-}
-
-.dashboard-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.65fr) minmax(275px, 1fr);
-    gap: 18px;
-    margin-bottom: 20px;
-}
-
-.panel {
-    padding: 21px;
-    min-width: 0;
-}
-
-.panel-heading {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 12px;
-    margin-bottom: 20px;
-}
-
-    .panel-heading p {
-        font-size: 10px;
-    }
-
-.pill {
-    font-size: 9px;
-    font-weight: 800;
-    letter-spacing: .6px;
-    padding: 5px 8px;
-    border-radius: 5px;
-}
-
-.purple-pill {
-    background: #8b5cf61c;
-    color: var(--purple);
-}
-
-.chart-area {
-    display: flex;
-    gap: 12px;
-    height: 210px;
-}
-
-.chart-y-labels {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    color: #707894;
-    font-size: 9px;
-    padding: 0 0 26px;
-}
-
-.chart-main {
-    flex: 1;
-    position: relative;
-    min-width: 0;
-}
-
-.chart-grid-lines {
-    position: absolute;
-    inset: 0 0 27px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-}
-
-    .chart-grid-lines i {
-        border-top: 1px dashed #292d46;
-        width: 100%;
-    }
-
-#activityChart {
-    width: 100%;
-    height: calc(100% - 27px);
-    position: absolute;
-    inset: 0 auto auto 0;
-    overflow: visible;
-}
-
-.chart-x-labels {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    display: flex;
-    justify-content: space-between;
-    color: #777f9e;
-    font-size: 9px;
-}
-
-.chart-legend {
-    display: flex;
-    gap: 20px;
-    margin-top: 17px;
-    color: #9ca2bc;
-    font-size: 10px;
-}
-
-.legend-dot {
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    margin-right: 6px;
-}
-
-.purple-bg {
-    background: var(--purple-bright);
-}
-
-.cyan-bg {
-    background: var(--cyan);
-}
-
-.red-bg {
-    background: var(--red);
-}
-
-.orange-bg {
-    background: var(--orange);
-}
-
-.yellow-bg {
-    background: var(--yellow);
-}
-
-.green-bg {
-    background: var(--green);
-}
-
-.severity-chart-wrap {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 24px;
-    padding: 10px 0 15px;
-}
-
-.donut {
-    width: 142px;
-    height: 142px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    flex-shrink: 0;
-    background: conic-gradient(var(--purple-bright) 0deg, #252943 0deg);
-    position: relative;
-}
-
-    .donut::before {
-        content: "";
-        position: absolute;
-        inset: 12px;
-        background: var(--panel);
-        border-radius: 50%;
-    }
-
-    .donut > div {
-        position: relative;
-        display: grid;
-        text-align: center;
-    }
-
-    .donut strong {
-        font-size: 27px;
-    }
-
-    .donut span {
-        font-size: 8px;
-        letter-spacing: 1px;
-        color: var(--muted);
-    }
-
-.severity-legend {
-    display: grid;
-    gap: 13px;
-    min-width: 100px;
-}
-
-    .severity-legend > div {
-        display: grid;
-        grid-template-columns: 10px 1fr auto;
-        gap: 5px;
-        align-items: center;
-        font-size: 10px;
-    }
-
-    .severity-legend .legend-dot {
-        margin: 0;
-    }
-
-    .severity-legend span {
-        color: #9ca2bc;
-    }
-
-    .severity-legend strong {
-        font-size: 10px;
-    }
-
-.recent-panel {
-    margin-bottom: 18px;
-}
-
-.table-wrap {
-    width: 100%;
-    overflow-x: auto;
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-    text-align: left;
-    white-space: nowrap;
-}
-
-thead th {
-    color: #858ca9;
-    font-size: 9px;
-    letter-spacing: .7px;
-    font-weight: 750;
-    padding: 12px 12px;
-    border-bottom: 1px solid var(--border);
-}
-
-tbody td {
-    padding: 14px 12px;
-    border-bottom: 1px solid #24283e;
-    font-size: 10px;
-    color: #c8cce0;
-}
-
-tbody tr:last-child td {
-    border-bottom: 0;
-}
-
-tbody tr:hover {
-    background: #ffffff04;
-}
-
-.table-id {
-    color: var(--purple);
-    font-weight: 750;
-}
-
-.priority, .status-badge {
-    display: inline-flex;
-    align-items: center;
-    border-radius: 5px;
-    padding: 4px 7px;
-    font-size: 9px;
-    font-weight: 750;
-}
-
-.priority-critical {
-    color: #ff8294;
-    background: #ff6b831a;
-}
-
-.priority-high {
-    color: #ffb47b;
-    background: #ffad661a;
-}
-
-.priority-medium {
-    color: #f5d46c;
-    background: #f5d46c17;
-}
-
-.priority-low {
-    color: #61dbac;
-    background: #45d6a019;
-}
-
-.status-open {
-    color: #ffb47b;
-    background: #ffad6617;
-}
-
-.status-in-progress {
-    color: #7edcf0;
-    background: #45d8e81a;
-}
-
-.status-resolved {
-    color: #61dbac;
-    background: #45d6a019;
-}
-
-.row-action {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: #a9aec8;
-    padding: 5px 8px;
-    border-radius: 6px;
-    font-size: 10px;
-}
-
-    .row-action:hover {
-        border-color: var(--purple);
-        color: white;
-    }
-
-.empty-state {
-    color: var(--muted);
-    font-size: 11px;
-    text-align: center;
-    padding: 28px 10px;
-}
-
-    .empty-state.large-empty {
-        padding: 65px 20px;
-    }
-
-.empty-icon {
-    font-size: 33px;
-    color: var(--purple);
-    margin-bottom: 10px;
-}
-
-.empty-state strong {
-    color: #cdd0e2;
-    display: block;
-}
-
-.empty-state p {
-    font-size: 10px;
-}
-
-.quick-actions {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 13px;
-}
-
-.quick-card {
-    display: flex;
-    align-items: center;
-    text-align: left;
-    gap: 11px;
-    padding: 15px;
-    border: 1px solid var(--border);
-    background: var(--panel);
-    border-radius: 12px;
-    color: var(--text);
-    min-width: 0;
-}
-
-    .quick-card:hover {
-        border-color: #8b5cf677;
-        transform: translateY(-1px);
-    }
-
-    .quick-card > span:nth-child(2) {
-        display: grid;
-        min-width: 0;
-    }
-
-    .quick-card strong {
-        font-size: 10px;
-    }
-
-    .quick-card small {
-        font-size: 9px;
-        color: var(--muted);
-        margin-top: 3px;
-    }
-
-    .quick-card > b {
-        margin-left: auto;
-        color: var(--purple);
-    }
-
-.tool-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr);
-    gap: 18px;
-    align-items: start;
-}
-
-.tool-panel label, .modal label {
-    display: block;
-    color: #c3c7dd;
-    font-size: 11px;
-    font-weight: 650;
-    margin: 17px 0 7px;
-}
-
-.required {
-    color: var(--red);
-}
-
-input, textarea, select {
-    width: 100%;
-    border: 1px solid #30344f;
-    background: #0b0e1c;
-    color: var(--text);
-    border-radius: 8px;
-    padding: 11px 12px;
-    font-size: 11px;
-    transition: border-color .2s;
-}
-
-    input::placeholder, textarea::placeholder {
-        color: #666e8b;
-    }
-
-    input:focus, textarea:focus, select:focus {
-        outline: none;
-        border-color: var(--purple-bright);
-        box-shadow: 0 0 0 3px #8b5cf615;
-    }
-
-textarea {
-    resize: vertical;
-    min-height: 100px;
-}
-
-select {
-    cursor: pointer;
-}
-
-.form-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: flex-end;
-    margin-top: 17px;
-}
-
-    .form-actions .button {
-        padding: 10px 12px;
-    }
-
-.result-panel {
-    min-height: 430px;
-}
-
-.risk-score-wrap {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin: 18px 0;
-}
-
-.risk-score {
-    display: grid;
-    place-items: center;
-    width: 70px;
-    height: 70px;
-    border: 2px solid var(--purple);
-    color: var(--purple);
-    border-radius: 50%;
-    font-size: 22px;
-    font-weight: 800;
-    flex-shrink: 0;
-}
-
-.risk-score-wrap strong {
-    font-size: 15px;
-}
-
-.risk-score-wrap p {
-    font-size: 10px;
-}
-
-.risk-meter, .strength-meter, .quiz-progress {
-    height: 6px;
-    border-radius: 20px;
-    overflow: hidden;
-    background: #282c45;
-}
-
-    .risk-meter > div, .strength-meter > div, .quiz-progress > div {
-        height: 100%;
-        width: 0;
-        border-radius: inherit;
-        transition: width .25s ease;
-        background: var(--purple-bright);
-    }
-
-.result-subheading {
-    margin: 24px 0 12px;
-}
-
-.indicator-item {
-    display: flex;
-    gap: 9px;
-    padding: 11px 0;
-    border-bottom: 1px solid var(--border);
-}
-
-    .indicator-item:last-child {
-        border: 0;
-    }
-
-    .indicator-item > span {
-        font-size: 13px;
-    }
-
-    .indicator-item strong {
-        font-size: 10px;
-        display: block;
-    }
-
-    .indicator-item p {
-        font-size: 10px;
-        margin-top: 3px;
-    }
-
-.disclaimer {
-    border-top: 1px solid var(--border);
-    padding-top: 13px;
-    font-size: 10px;
-    margin-top: 16px;
-}
-
-.password-layout, .quiz-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr);
-    gap: 18px;
-    align-items: start;
-}
-
-.password-input-wrap {
-    position: relative;
-}
-
-    .password-input-wrap input {
-        padding-right: 65px;
-    }
-
-    .password-input-wrap button {
-        position: absolute;
-        right: 7px;
-        top: 50%;
-        transform: translateY(-50%);
-        border: 0;
-        background: transparent;
-        color: var(--purple);
-        font-size: 10px;
-        padding: 6px;
-    }
-
-.strength-head, .strength-score {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 10px;
-    margin: 20px 0 8px;
-    color: #a8aec6;
-}
-
-    .strength-head strong {
-        color: var(--muted);
-    }
-
-.strength-score {
-    margin-top: 9px;
-}
-
-    .strength-score strong {
-        color: var(--text);
-    }
-
-.check-list {
-    display: grid;
-    gap: 9px;
-}
-
-.check-item {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    font-size: 10px;
-    color: #a5abc3;
-}
-
-.check-mark {
-    width: 18px;
-    height: 18px;
-    display: grid;
-    place-items: center;
-    border-radius: 50%;
-    background: #262a40;
-    color: #858ca8;
-    font-size: 10px;
-}
-
-.check-item.pass .check-mark {
-    color: var(--green);
-    background: #45d6a019;
-}
-
-.suggestion-box {
-    margin-top: 23px;
-    padding: 13px;
-    background: #18162c;
-    border: 1px solid #3c305d;
-    border-radius: 9px;
-}
-
-    .suggestion-box strong {
-        font-size: 10px;
-        color: #d4c5ff;
-    }
-
-    .suggestion-box p {
-        font-size: 10px;
-        line-height: 1.7;
-    }
-
-.info-item {
-    display: flex;
-    gap: 13px;
-    padding: 15px 0;
-    border-bottom: 1px solid var(--border);
-}
-
-.info-number {
-    display: grid;
-    place-items: center;
-    min-width: 32px;
-    height: 32px;
-    border-radius: 8px;
-    background: #8b5cf61b;
-    color: var(--purple);
-    font-size: 10px;
-    font-weight: 800;
-}
-
-.info-item strong {
-    font-size: 11px;
-}
-
-.info-item p {
-    font-size: 10px;
-    line-height: 1.7;
-}
-
-.compact-stats {
-    margin-bottom: 19px;
-}
-
-    .compact-stats .stat-card {
-        padding: 14px 17px;
-    }
-
-    .compact-stats .stat-number {
-        font-size: 25px;
-    }
-
-.incident-panel {
-    padding: 0;
-    overflow: hidden;
-}
-
-.filters {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 10px;
-    padding: 17px;
-    border-bottom: 1px solid var(--border);
-}
-
-    .filters select {
-        width: auto;
-        min-width: 120px;
-        max-width: 150px;
-        padding: 10px;
-    }
-
-.search-box {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: 1 1 150px;
-    border: 1px solid #30344f;
-    background: #0b0e1c;
-    border-radius: 8px;
-    padding-left: 10px;
-    color: var(--muted);
-}
-
-    .search-box input {
-        border: 0;
-        background: transparent;
-        box-shadow: none;
-        min-width: 0;
-    }
-
-.filters .button {
-    padding: 10px 11px;
-}
-
-.incident-panel .table-wrap {
-    padding: 0 10px;
-}
-
-.incident-panel tbody td {
-    padding-top: 13px;
-    padding-bottom: 13px;
-}
-
-.data-actions {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    margin-top: 14px;
-}
-
-    .data-actions p {
-        font-size: 10px;
-    }
-
-.text-button {
-    background: transparent;
-    border: 0;
-    font-size: 10px;
-    font-weight: 700;
-}
-
-.danger-text {
-    color: var(--red);
-}
-
-    .danger-text:hover {
-        text-decoration: underline;
-    }
-
-.academy-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 20px;
-    padding: 27px;
-    margin-bottom: 19px;
-    border: 1px solid #45336c;
-    border-radius: 14px;
-    background: radial-gradient(ellipse at 80% 30%, #6945b82b, transparent 55%), linear-gradient(110deg, #17132c, #101326);
-}
-
-    .academy-banner h2 {
-        font-size: 22px;
-        margin-top: 7px;
-    }
-
-    .academy-banner p {
-        font-size: 11px;
-    }
-
-.academy-symbol {
-    font-size: 55px;
-    color: var(--purple);
-    text-shadow: 0 0 35px #8b5cf677;
-    padding: 0 20px;
-}
-
-.quiz-panel {
-    padding: 25px;
-}
-
-.quiz-top {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    font-size: 10px;
-    color: var(--purple);
-    font-weight: 750;
-    letter-spacing: .6px;
-}
-
-.quiz-progress {
-    margin: 12px 0 26px;
-    height: 5px;
-}
-
-.quiz-panel h2 {
-    font-size: 18px;
-    line-height: 1.5;
-}
-
-.quiz-panel #quizDescription {
-    font-size: 11px;
-    margin-bottom: 20px;
-}
-
-.quiz-options {
-    display: grid;
-    gap: 10px;
-}
-
-.quiz-option {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    width: 100%;
-    padding: 13px;
-    border: 1px solid var(--border);
-    background: #0e1121;
-    border-radius: 9px;
-    color: #c4c9df;
-    text-align: left;
-    font-size: 11px;
-}
-
-    .quiz-option:hover:not(:disabled) {
-        border-color: #8b5cf688;
-        background: #8b5cf610;
-    }
-
-    .quiz-option.selected {
-        border-color: var(--purple-bright);
-        background: #8b5cf61b;
-    }
-
-    .quiz-option.correct {
-        border-color: var(--green);
-        background: #45d6a012;
-    }
-
-    .quiz-option.incorrect {
-        border-color: var(--red);
-        background: #ff6b8312;
-    }
-
-.option-letter {
-    display: grid;
-    place-items: center;
-    min-width: 25px;
-    height: 25px;
-    border: 1px solid #343953;
-    border-radius: 7px;
-    color: #aeb4cd;
-    font-size: 10px;
-}
-
-.quiz-feedback {
-    margin-top: 15px;
-    padding: 13px;
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    font-size: 11px;
-}
-
-    .quiz-feedback p {
-        font-size: 10px;
-        margin-top: 5px;
-    }
-
-    .quiz-feedback.correct-feedback {
-        border-color: #45d6a055;
-        background: #45d6a00a;
-    }
-
-    .quiz-feedback.wrong-feedback {
-        border-color: #ff6b8355;
-        background: #ff6b830a;
-    }
-
-.quiz-actions {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 20px;
-}
-
-.learning-stat {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 17px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 11px;
-    color: #a4aac4;
-}
-
-    .learning-stat strong {
-        color: var(--text);
-        font-size: 14px;
-    }
-
-.finish-card {
-    text-align: center;
-    padding: 35px 10px;
-}
-
-.finish-icon {
-    font-size: 45px;
-    margin-bottom: 15px;
-}
-
-.finish-card h2 {
-    font-size: 23px;
-}
-
-.finish-card p {
-    margin: 12px 0 18px;
-}
-
-.footer {
-    display: flex;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 8px;
-    border-top: 1px solid var(--border);
-    margin-top: 35px;
-    padding: 19px 0 5px;
-    color: #717895;
-    font-size: 9px;
-}
-
-.modal-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    display: grid;
-    place-items: center;
-    padding: 20px;
-    background: #050610cc;
-    backdrop-filter: blur(5px);
-}
-
-.modal {
-    width: 100%;
-    max-width: 490px;
-    max-height: 90vh;
-    overflow-y: auto;
-    background: #111427;
-    border: 1px solid #393151;
-    border-radius: 16px;
-    padding: 25px;
-    box-shadow: 0 20px 90px #0008;
-}
-
-.modal-heading {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 12px;
-}
-
-    .modal-heading h2 {
-        font-size: 20px;
-        margin-top: 4px;
-    }
-
-.modal form > label:first-child {
-    margin-top: 15px;
-}
-
-.form-two {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 13px;
-}
-
-.modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 9px;
-    margin-top: 23px;
-}
-
-.toast {
-    position: fixed;
-    z-index: 100;
-    bottom: 25px;
-    right: 25px;
-    max-width: min(370px, calc(100vw - 40px));
-    padding: 13px 17px;
-    background: #1c2037;
-    border: 1px solid #65509a;
-    border-radius: 10px;
-    color: #eee8ff;
-    font-size: 11px;
-    box-shadow: 0 10px 35px #0005;
-    opacity: 0;
-    transform: translateY(12px);
-    pointer-events: none;
-    transition: .25s;
-}
-
-    .toast.show {
-        opacity: 1;
-        transform: translateY(0);
-    }
-
-@media (min-width: 1500px) {
-    .page-container {
-        padding-left: 40px;
-        padding-right: 40px;
-    }
-}
-
-@media (max-width: 1200px) {
-    .page-container {
-        padding-left: 22px;
-        padding-right: 22px;
-    }
-
-    .topbar {
-        padding-left: 22px;
-        padding-right: 22px;
-    }
-
-    .stats-grid {
-        gap: 10px;
-    }
-
-    .stat-card {
-        padding: 15px;
-    }
-
-    .severity-chart-wrap {
-        gap: 15px;
-    }
-
-    .donut {
-        width: 120px;
-        height: 120px;
-    }
-}
-
-@media (max-width: 950px) {
-    .sidebar {
-        width: 225px;
-    }
-
-    .main-content {
-        margin-left: 225px;
-    }
-
-    .dashboard-grid, .tool-grid, .password-layout, .quiz-layout {
-        grid-template-columns: 1fr;
-    }
-
-    .stats-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .severity-chart-wrap {
-        justify-content: flex-start;
-    }
-}
-
-@media (max-width: 650px) {
-    .sidebar {
-        width: 252px;
-        transform: translateX(-105%);
-        transition: transform .25s ease;
-        box-shadow: 10px 0 40px #0006;
-    }
+        const actionButton = event.target.closest("[data-action]");
+        if (actionButton && actionButton.dataset.action === "new-incident") {
+            openIncidentModal();
+        }
+    });
+
+    $("#menuToggle").addEventListener("click", () => {
+        $("#sidebar").classList.toggle("open");
+    });
+
+    document.addEventListener("click", function(event) {
+        if (!event.target.closest("#sidebar") &&
+            !event.target.closest("#menuToggle")) {
+            $("#sidebar").classList.remove("open");
+        }
+    });
+
+    // --------------------------------------------------
+    // INCIDENT MANAGEMENT
+    // --------------------------------------------------
+
+    function renderIncidents() {
+        const total = incidents.length;
+        const open = incidents.filter(item => item.status === "Open").length;
+        const progress = incidents.filter(item => item.status === "In Progress").length;
+        const resolved = incidents.filter(item => item.status === "Resolved").length;
+        const critical = incidents.filter(item => item.priority === "Critical").length;
+
+        $("#totalIncidents").textContent = total;
+        $("#openIncidents").textContent = open;
+        $("#criticalIncidents").textContent = critical;
+        $("#resolvedIncidents").textContent = resolved;
+        $("#incidentNavCount").textContent = open;
+        $("#tableTotal").textContent = total;
+        $("#tableOpen").textContent = open;
+        $("#tableProgress").textContent = progress;
+        $("#tableResolved").textContent = resolved;
+
+        renderRecentIncidents();
+        renderIncidentTable();
+        renderSeverityChart();
+    }
+
+    function renderRecentIncidents() {
+        const recent = [...incidents]
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+            .slice(0, 5);
+
+        $("#recentIncidents").innerHTML = recent.map(item => `
+            <tr>
+                <td><span class="table-id">${escapeHTML(item.id)}</span></td>
+                <td>${escapeHTML(item.title)}</td>
+                <td>${priorityBadge(item.priority)}</td>
+                <td>${statusBadge(item.status)}</td>
+                <td>${formatDate(item.createdAt)}</td>
+            </tr>
+        `).join("");
+
+        $("#recentEmpty").classList.toggle("hidden", recent.length > 0);
+    }
+
+    function renderIncidentTable() {
+        const query = $("#incidentSearch").value.trim().toLowerCase();
+        const priority = $("#priorityFilter").value;
+        const status = $("#statusFilter").value;
+
+        const filtered = [...incidents]
+            .filter(item => {
+                const matchesQuery = [
+                    item.id, item.title, item.description
+                ].some(value => String(value || "").toLowerCase().includes(query));
+
+                return matchesQuery
+                    && (!priority || item.priority === priority)
+                    && (!status || item.status === status);
+            })
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+        $("#incidentTable").innerHTML = filtered.map(item => `
+            <tr>
+                <td><span class="table-id">${escapeHTML(item.id)}</span></td>
+                <td>
+                    <strong>${escapeHTML(item.title)}</strong>
+                    ${item.description ? `<div style="color:#858ca9;font-size:9px;margin-top:3px;max-width:230px;overflow:hidden;text-overflow:ellipsis">${escapeHTML(item.description)}</div>` : ""}
+                </td>
+                <td>${priorityBadge(item.priority)}</td>
+                <td>${statusBadge(item.status)}</td>
+                <td>${formatDate(item.createdAt)}</td>
+                <td>
+                    <button class="row-action" data-incident-action="status"
+                        data-id="${escapeHTML(item.id)}" title="Change status">Update</button>
+                    <button class="row-action" data-incident-action="edit"
+                        data-id="${escapeHTML(item.id)}" title="Edit incident">Edit</button>
+                    <button class="row-action" data-incident-action="delete"
+                        data-id="${escapeHTML(item.id)}" title="Delete incident">Delete</button>
+                </td>
+            </tr>
+        `).join("");
+
+        $("#incidentEmpty").classList.toggle("hidden", filtered.length > 0);
+    }
 
-        .sidebar.open {
-            transform: translateX(0);
+    function renderSeverityChart() {
+        const counts = {
+            Critical: incidents.filter(i => i.priority === "Critical").length,
+            High: incidents.filter(i => i.priority === "High").length,
+            Medium: incidents.filter(i => i.priority === "Medium").length,
+            Low: incidents.filter(i => i.priority === "Low").length
+        };
+
+        const total = incidents.length;
+        $("#severityTotal").textContent = total;
+        $("#criticalLegend").textContent = counts.Critical;
+        $("#highLegend").textContent = counts.High;
+        $("#mediumLegend").textContent = counts.Medium;
+        $("#lowLegend").textContent = counts.Low;
+
+        const colors = {
+            Critical: "#ff6b83",
+            High: "#ffad66",
+            Medium: "#f5d46c",
+            Low: "#45d6a0"
+        };
+
+        let currentAngle = 0;
+        const slices = [];
+
+        priorities.forEach(priority => {
+            const degrees = total ? counts[priority] / total * 360 : 0;
+            if (degrees > 0) {
+                slices.push(`${colors[priority]} ${currentAngle}deg ${currentAngle + degrees}deg`);
+                currentAngle += degrees;
+            }
+        });
+
+        $("#severityDonut").style.background = total
+            ? `conic-gradient(${slices.join(", ")})`
+            : "#252943";
+    }
+
+    function openIncidentModal(incident = null) {
+        editingIncidentId = incident ? incident.id : null;
+        $("#incidentForm").reset();
+        $("#modalTitle").textContent = incident ? "Edit incident" : "Create incident";
+
+        $("#incidentTitle").value = incident ? incident.title : "";
+        $("#incidentDescription").value = incident ? incident.description || "" : "";
+        $("#incidentPriority").value = incident ? incident.priority : "Medium";
+        $("#incidentStatus").value = incident ? incident.status : "Open";
+
+        $("#incidentModal").classList.remove("hidden");
+        $("#incidentTitle").focus();
+    }
+
+    function closeIncidentModal() {
+        $("#incidentModal").classList.add("hidden");
+        editingIncidentId = null;
+    }
+
+    $("#closeModal").addEventListener("click", closeIncidentModal);
+    $("#cancelModal").addEventListener("click", closeIncidentModal);
+
+    $("#incidentModal").addEventListener("click", function(event) {
+        if (event.target === $("#incidentModal")) closeIncidentModal();
+    });
+
+    document.addEventListener("keydown", function(event) {
+        if (event.key === "Escape") closeIncidentModal();
+    });
+
+    $("#incidentForm").addEventListener("submit", function(event) {
+        event.preventDefault();
+        const wasEditing = Boolean(editingIncidentId);
+        const title = $("#incidentTitle").value.trim();
+        if (!title) {
+            showToast("Please enter an incident title.");
+            return;
         }
 
-    .main-content {
-        margin-left: 0;
-    }
+        const description = $("#incidentDescription").value.trim();
+        const priority = $("#incidentPriority").value;
+        const status = $("#incidentStatus").value;
 
-    .topbar {
-        height: 66px;
-        padding: 0 14px;
-    }
+        if (editingIncidentId) {
+            const incident = incidents.find(item => item.id === editingIncidentId);
+            if (!incident) {
+                showToast("Incident not found.");
+                closeIncidentModal();
+                return;
+            }
 
-    .menu-toggle {
-        display: inline-block;
-    }
-
-    .topbar-left, .topbar-right {
-        gap: 9px;
-    }
-
-    .environment-tag {
-        display: none;
-    }
-
-    .page-container {
-        padding: 22px 14px 16px;
-    }
-
-    .page-heading {
-        align-items: flex-start;
-        flex-direction: column;
-        gap: 14px;
-    }
-
-        .page-heading > .button {
-            align-self: stretch;
+            incident.title = title;
+            incident.description = description;
+            incident.priority = priority;
+            incident.status = status;
+            incident.updatedAt = new Date().toISOString();
+        } else {
+            incidents.push({
+                id: makeId(),
+                title,
+                description,
+                priority,
+                status,
+                createdAt: new Date().toISOString()
+            });
         }
 
-    .stats-grid {
-        gap: 10px;
-    }
+        if (!saveIncidents()) return;
 
-    .stat-card {
-        padding: 13px;
-    }
+        closeIncidentModal();
+        renderIncidents();
+        showToast(wasEditing ? "Incident updated." : "Incident created.");
+    });
 
-    .stat-top {
-        font-size: 10px;
-    }
+    $("#incidentTable").addEventListener("click", function(event) {
+        const button = event.target.closest("[data-incident-action]");
+        if (!button) return;
 
-    .stat-number {
-        font-size: 25px;
-    }
+        const incident = incidents.find(item => item.id === button.dataset.id);
+        if (!incident) return;
 
-    .dashboard-grid {
-        gap: 13px;
-    }
+        const action = button.dataset.incidentAction;
 
-    .panel {
-        padding: 15px;
-    }
+        if (action === "edit") {
+            openIncidentModal(incident);
+        } else if (action === "status") {
+            const currentIndex = statuses.indexOf(incident.status);
+            incident.status = statuses[(currentIndex + 1) % statuses.length];
+            incident.updatedAt = new Date().toISOString();
 
-    .severity-chart-wrap {
-        gap: 16px;
-    }
+            if (saveIncidents()) {
+                renderIncidents();
+                showToast(`Status changed to ${incident.status}.`);
+            }
+        } else if (action === "delete") {
+            if (!confirm(`Delete "${incident.title}"? This cannot be undone.`)) return;
+            incidents = incidents.filter(item => item.id !== incident.id);
+            if (saveIncidents()) {
+                renderIncidents();
+                showToast("Incident deleted.");
+            }
+        }
+    });
 
-    .donut {
-        width: 112px;
-        height: 112px;
-    }
+    ["incidentSearch", "priorityFilter", "statusFilter"].forEach(id => {
+        $("#" + id).addEventListener("input", renderIncidentTable);
+        $("#" + id).addEventListener("change", renderIncidentTable);
+    });
 
-    .quick-actions {
-        grid-template-columns: 1fr;
-    }
-
-    .quick-card {
-        padding: 13px;
-    }
-
-    .filters {
-        align-items: stretch;
-    }
-
-    .search-box {
-        flex-basis: 100%;
-    }
-
-    .filters select {
-        flex: 1;
-        min-width: 0;
-        max-width: none;
-    }
-
-    .filters .button {
-        flex: 1;
-    }
-
-    .data-actions {
-        align-items: flex-start;
-        flex-direction: column;
-    }
-
-    .academy-banner {
-        padding: 20px;
-    }
-
-        .academy-banner h2 {
-            font-size: 19px;
+    $("#clearIncidents").addEventListener("click", function() {
+        if (!incidents.length) {
+            showToast("There are no incidents to clear.");
+            return;
         }
 
-    .academy-symbol {
-        font-size: 38px;
-        padding: 0;
+        if (!confirm("Delete ALL incident records from this browser? This cannot be undone.")) return;
+
+        incidents = [];
+        if (saveIncidents()) {
+            renderIncidents();
+            showToast("All incidents cleared.");
+        }
+    });
+
+    $("#exportIncidents").addEventListener("click", function() {
+        if (!incidents.length) {
+            showToast("There are no incidents to export.");
+            return;
+        }
+
+        const headers = ["ID", "Title", "Description", "Priority", "Status", "Created"];
+        const rows = incidents.map(item => [
+            item.id, item.title, item.description || "",
+            item.priority, item.status, item.createdAt
+        ]);
+
+        function csvCell(value) {
+            let text = String(value ?? "");
+            // Reduce the risk of spreadsheet formula injection.
+            if (/^[\s]*[=+\-@]/.test(text)) text = "'" + text;
+            return '"' + text.replace(/"/g, '""') + '"';
+        }
+
+        const csv = [headers, ...rows]
+            .map(row => row.map(csvCell).join(",")).join("\r\n");
+
+        const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "cybershield-incidents.csv";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        showToast("Incident CSV exported.");
+    });
+
+    // --------------------------------------------------
+    // SIMULATED THREAT ACTIVITY CHART
+    // --------------------------------------------------
+
+    function renderActivityChart() {
+        const detected = [14, 23, 18, 31, 24, 35, 28];
+        const investigated = [7, 12, 10, 17, 13, 21, 16];
+
+        function points(values) {
+            return values.map((value, index) => {
+                const x = index * 100;
+                const y = 180 - value * 4.1;
+                return `${x},${y}`;
+            }).join(" ");
+        }
+
+        const chart = $("#activityChart");
+        chart.innerHTML = `
+            <defs>
+                <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#8b5cf6" stop-opacity=".3"/>
+                    <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+                </linearGradient>
+                <filter id="chartGlow" x="-30%" y="-30%" width="160%" height="160%">
+                    <feGaussianBlur stdDeviation="3" result="blur"/>
+                    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+            </defs>
+            <polygon points="0,200 ${points(detected)} 600,200" fill="url(#chartFill)"/>
+            <polyline points="${points(detected)}" fill="none" stroke="#a78bfa"
+                stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" filter="url(#chartGlow)"/>
+            <polyline points="${points(investigated)}" fill="none" stroke="#45d8e8"
+                stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            ${detected.map((value, index) =>
+            `<circle cx="${index * 100}" cy="${180 - value * 4.1}" r="3" fill="#c4b5fd" stroke="#111427" stroke-width="1.5"/>`
+        ).join("")}
+        `;
     }
 
-    .quiz-panel {
-        padding: 17px;
+    $("#refreshButton").addEventListener("click", function() {
+        renderIncidents();
+        renderActivityChart();
+        showToast("Dashboard refreshed. Threat chart data remains simulated.");
+    });
+
+    // --------------------------------------------------
+    // PHISHING EMAIL ANALYSIS
+    // --------------------------------------------------
+
+    $("#sampleEmail").addEventListener("click", function() {
+        $("#emailSender").value = "security-alert@account-verify.example";
+        $("#emailSubject").value = "URGENT: Your account will be suspended";
+        $("#emailBody").value =
+            "Dear customer,\n\nURGENT! Your account will be suspended today. " +
+            "Verify your identity immediately to avoid losing access. " +
+            "Click here: http://example.invalid/verify-account\n\n" +
+            "Enter your password and account details now.\n\nSecurity Team";
+        showToast("Fictional sample loaded. It is safe to analyse as text.");
+    });
+
+    $("#phishingForm").addEventListener("reset", function() {
+        setTimeout(() => {
+            $("#phishingPlaceholder").classList.remove("hidden");
+            $("#phishingResults").classList.add("hidden");
+        }, 0);
+    });
+
+    $("#phishingForm").addEventListener("submit", function(event) {
+        event.preventDefault();
+
+        const sender = $("#emailSender").value.trim();
+        const subject = $("#emailSubject").value.trim();
+        const body = $("#emailBody").value.trim();
+
+        if (!body) {
+            showToast("Please enter email content to analyse.");
+            return;
+        }
+
+        const text = `${subject}\n${body}`;
+        const indicators = [];
+        let score = 0;
+
+        function check(pattern, points, title, explanation) {
+            if (pattern.test(text)) {
+                score += points;
+                indicators.push({ title, explanation, points });
+            }
+        }
+
+        check(/\b(urgent|immediately|act now|final warning|expires today|within 24 hours|suspended today)\b/i,
+            18, "Urgent or threatening language",
+            "Pressure to act quickly can prevent careful verification.");
+
+        check(/\b(password|login credentials|passcode|one.time code|verify your identity|enter your details)\b/i,
+            22, "Sensitive information requested",
+            "Treat unexpected requests for passwords or verification codes with caution.");
+
+        check(/\b(click here|verify now|confirm your account|open the link|download immediately)\b/i,
+            12, "Call to action",
+            "Unexpected links and instructions should be checked before use.");
+
+        check(/\b(gift card|wire transfer|crypto(currency)?|bitcoin|payment immediately|bank details)\b/i,
+            18, "Unusual payment or money request",
+            "Unexpected payments, cryptocurrency or gift-card requests deserve independent verification.");
+
+        check(/\b(account (will be|has been) (locked|suspended|closed)|unusual activity detected|security alert)\b/i,
+            12, "Account threat or security scare",
+            "Attackers sometimes imitate account warnings to encourage rushed decisions.");
+
+        const urls = body.match(/https?:\/\/[^\s<>"']+/gi) || [];
+        if (urls.length) {
+            score += Math.min(12, urls.length * 6);
+            indicators.push({
+                title: "Links included in the message",
+                explanation: `${urls.length} URL(s) detected. Inspect the real destination independently; a link's presence alone does not prove phishing.`,
+                points: Math.min(12, urls.length * 6)
+            });
+        }
+
+        if (/@/.test(sender) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sender)) {
+            score += 12;
+            indicators.push({
+                title: "Unusual sender format",
+                explanation: "The sender text does not resemble a standard email address. This alone does not establish fraud.",
+                points: 12
+            });
+        }
+
+        if (/\b(dear customer|dear user|valued customer)\b/i.test(text)) {
+            score += 6;
+            indicators.push({
+                title: "Generic greeting",
+                explanation: "Generic greetings can occur in phishing emails, although legitimate bulk messages use them too.",
+                points: 6
+            });
+        }
+
+        if (/\b(guaranteed prize|you have won|claim your reward|free money)\b/i.test(text)) {
+            score += 15;
+            indicators.push({
+                title: "Unexpected prize or reward",
+                explanation: "Unsolicited rewards may be used to lure people into sharing information or paying fees.",
+                points: 15
+            });
+        }
+
+        score = Math.min(100, score);
+
+        let level, summary, color;
+        if (score >= 60) {
+            level = "High risk";
+            summary = "Several warning signs were detected. Treat the message cautiously.";
+            color = "#ff6b83";
+        } else if (score >= 30) {
+            level = "Medium risk";
+            summary = "Some warning signs were detected. Verify the sender and claims independently.";
+            color = "#ffad66";
+        } else {
+            level = "Lower detected risk";
+            summary = "Few indicators were detected. This does not mean the email is safe.";
+            color = "#45d6a0";
+        }
+
+        $("#phishingPlaceholder").classList.add("hidden");
+        $("#phishingResults").classList.remove("hidden");
+        $("#riskScore").textContent = score;
+        $("#riskScore").style.borderColor = color;
+        $("#riskScore").style.color = color;
+        $("#riskLevel").textContent = level;
+        $("#riskLevel").style.color = color;
+        $("#riskSummary").textContent = summary;
+        $("#riskMeterFill").style.width = score + "%";
+        $("#riskMeterFill").style.background = color;
+
+        $("#phishingIndicators").innerHTML = indicators.length
+            ? indicators.map(item => `
+                <div class="indicator-item">
+                    <span style="color:${color}">⚠</span>
+                    <div><strong>${escapeHTML(item.title)}</strong>
+                        <p>${escapeHTML(item.explanation)}</p></div>
+                </div>
+            `).join("")
+            : `<div class="indicator-item"><span style="color:#45d6a0">✓</span><div>
+                <strong>No configured warning patterns detected</strong>
+                <p>Automated checks can miss sophisticated phishing. Continue to verify unexpected messages.</p>
+            </div></div>`;
+
+        showToast("Email text analysis completed.");
+    });
+
+    // --------------------------------------------------
+    // PASSWORD STRENGTH CHECKER
+    // --------------------------------------------------
+
+    const passwordInput = $("#passwordInput");
+
+    $("#togglePassword").addEventListener("click", function() {
+        const visible = passwordInput.type === "password";
+        passwordInput.type = visible ? "text" : "password";
+        this.textContent = visible ? "Hide" : "Show";
+        this.setAttribute("aria-label", visible ? "Hide password" : "Show password");
+    });
+
+    const passwordRules = [
+        { label: "At least 12 characters", test: value => value.length >= 12 },
+        { label: "Includes lowercase letters", test: value => /[a-z]/.test(value) },
+        { label: "Includes uppercase letters", test: value => /[A-Z]/.test(value) },
+        { label: "Includes numbers", test: value => /\d/.test(value) },
+        { label: "Includes symbols", test: value => /[^A-Za-z0-9]/.test(value) },
+        {
+            label: "Avoids common or predictable patterns", test: value => {
+                const lower = value.toLowerCase();
+                const common = [
+                    "password", "qwerty", "letmein", "welcome",
+                    "admin", "123456", "iloveyou"
+                ];
+                return !common.some(item => lower.includes(item))
+                    && !/(.)\1{3,}/i.test(value)
+                    && !/1234|2345|3456|4567|5678|6789|abcd|qwer/i.test(lower);
+            }
+        }
+    ];
+
+    function checkPassword() {
+        const value = passwordInput.value;
+        const checks = passwordRules.map(rule => ({
+            label: rule.label,
+            pass: rule.test(value)
+        }));
+
+        let score = 0;
+        if (value.length >= 8) score += 15;
+        if (value.length >= 12) score += 20;
+        if (value.length >= 16) score += 10;
+        if (/[a-z]/.test(value)) score += 10;
+        if (/[A-Z]/.test(value)) score += 10;
+        if (/\d/.test(value)) score += 10;
+        if (/[^A-Za-z0-9]/.test(value)) score += 15;
+        if (checks[5].pass) score += 10;
+        score = Math.min(100, score);
+
+        if (!value) score = 0;
+
+        let label = "Very weak";
+        let color = "#ff6b83";
+        if (score >= 85) { label = "Strong"; color = "#45d6a0"; }
+        else if (score >= 65) { label = "Good"; color = "#45d8e8"; }
+        else if (score >= 40) { label = "Fair"; color = "#f5d46c"; }
+        else if (score >= 20) { label = "Weak"; color = "#ffad66"; }
+        if (!value) { label = "Not tested"; color = "#8b91ae"; }
+
+        $("#strengthLabel").textContent = label;
+        $("#strengthLabel").style.color = color;
+        $("#passwordScore").textContent = `${score} / 100`;
+        $("#strengthFill").style.width = score + "%";
+        $("#strengthFill").style.background = color;
+
+        $("#passwordChecks").innerHTML = checks.map(item => `
+            <div class="check-item ${item.pass ? "pass" : ""}">
+                <span class="check-mark">${item.pass ? "✓" : "·"}</span>
+                <span>${escapeHTML(item.label)}</span>
+            </div>
+        `).join("");
+
+        let tip = "Use a long, unique passphrase and avoid personal information.";
+        if (value.length > 0 && !checks[0].pass) {
+            tip = "Try a longer passphrase made from several unrelated words.";
+        } else if (value.length > 0 && !checks[5].pass) {
+            tip = "Avoid common passwords, repeated characters and predictable sequences.";
+        } else if (score >= 85) {
+            tip = "Good result under these simple rules. Use this password for only one account and store it safely in a password manager.";
+        }
+
+        $("#passwordTip").textContent = tip;
     }
 
-    .footer {
-        flex-direction: column;
-    }
-}
+    passwordInput.addEventListener("input", checkPassword);
 
-@media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-        animation-duration: .01ms !important;
-        transition-duration: .01ms !important;
-        scroll-behavior: auto !important;
-    }
-}
+    // --------------------------------------------------
+    // CYBERSECURITY QUIZ
+    // --------------------------------------------------
 
+    const questions = [
+        {
+            question: "You receive an unexpected email asking you to verify your password using a link. What should you do?",
+            options: [
+                "Click immediately to avoid losing access",
+                "Reply with your password",
+                "Visit the official website independently and verify the request",
+                "Forward it to all your contacts"
+            ],
+            answer: 2,
+            explanation: "Do not use unexpected links to verify accounts. Visit the official website using a known address or contact the organisation through a trusted channel."
+        },
+        {
+            question: "What is multi-factor authentication (MFA)?",
+            options: [
+                "Using the same password on multiple sites",
+                "Using two or more different types of verification",
+                "Changing your username every day",
+                "Installing several browsers"
+            ],
+            answer: 1,
+            explanation: "MFA combines different verification factors, such as something you know and something you have, to make unauthorised access harder."
+        },
+        {
+            question: "Which password practice is safest?",
+            options: [
+                "Use your birthday",
+                "Reuse a memorable password everywhere",
+                "Use a unique, long password for each account",
+                "Write your password in a public profile"
+            ],
+            answer: 2,
+            explanation: "Unique passwords reduce the damage if one service suffers a breach. A password manager can help you generate and store them."
+        },
+        {
+            question: "What should you do with an unexpected attachment from an unknown sender?",
+            options: [
+                "Open it to identify the sender",
+                "Disable your antivirus first",
+                "Forward it to your personal email",
+                "Verify the sender and report or delete it if suspicious"
+            ],
+            answer: 3,
+            explanation: "Unexpected attachments may contain malicious content. Verify the message through a separate trusted channel before opening anything."
+        },
+        {
+            question: "What does the principle of least privilege mean?",
+            options: [
+                "Everyone receives administrator access",
+                "Users receive only the access needed for their duties",
+                "Passwords are not required",
+                "All accounts share one login"
+            ],
+            answer: 1,
+            explanation: "Least privilege limits unnecessary access and helps reduce the impact of mistakes or compromised accounts."
+        },
+        {
+            question: "What is ransomware?",
+            options: [
+                "A program that encrypts or blocks access to data and demands payment",
+                "A safe method of backing up files",
+                "A type of screen brightness setting",
+                "A password manager"
+            ],
+            answer: 0,
+            explanation: "Ransomware is malicious software that can encrypt or deny access to files or systems and demand a ransom."
+        },
+        {
+            question: "Why are software and security updates important?",
+            options: [
+                "They always make computers slower",
+                "They remove the need for passwords",
+                "They can fix known vulnerabilities and bugs",
+                "They guarantee that attacks are impossible"
+            ],
+            answer: 2,
+            explanation: "Updates often fix security vulnerabilities. Keeping systems updated reduces exposure but does not eliminate every risk."
+        },
+        {
+            question: "You suspect a work account has been compromised. What is a sensible first response?",
+            options: [
+                "Ignore it until tomorrow",
+                "Delete all company records",
+                "Post the account details online",
+                "Report it promptly through the approved security process"
+            ],
+            answer: 3,
+            explanation: "Prompt reporting helps the security team investigate, contain potential damage and follow the organisation's incident response procedures."
+        }
+    ];
+
+    let quizOrder = questions.map((_, index) => index);
+    let quizIndex = 0;
+    let quizScore = 0;
+    let selectedAnswer = null;
+    let answered = false;
+
+    function loadQuizStats() {
+        try {
+            const saved = JSON.parse(localStorage.getItem(QUIZ_KEY) || "{}");
+
+            return {
+                best: Number(saved.best) || 0,
+                completed: Number(saved.completed) || 0,
+                latest: saved.latest === null || saved.latest === undefined
+                    ? null
+                    : Number.isFinite(Number(saved.latest))
+                        ? Number(saved.latest)
+                        : null
+            };
+        } catch {
+            return { best: 0, completed: 0, latest: null };
+        }
+    }
+    function saveQuizStats(stats) {
+        try {
+            localStorage.setItem(QUIZ_KEY, JSON.stringify(stats));
+            return true;
+        } catch (error) {
+            console.error("Quiz progress could not be saved:", error);
+            showToast("Quiz completed, but progress could not be saved.");
+            return false;
+        }
+    }
+
+    function renderQuizStats() {
+        const stats = loadQuizStats();
+        $("#bestQuizScore").textContent = stats.best + "%";
+        $("#quizCompletions").textContent = stats.completed;
+        $("#latestQuizScore").textContent = stats.latest === null ? "—" : stats.latest + "%";
+    }
+
+    function renderQuestion() {
+        const question = questions[quizOrder[quizIndex]];
+        selectedAnswer = null;
+        answered = false;
+
+        $("#quizFinished").classList.add("hidden");
+        $("#quizContent").classList.remove("hidden");
+        $("#quizProgressText").textContent = `QUESTION ${quizIndex + 1} OF ${questions.length}`;
+        $("#quizScoreText").textContent = "Score: " + quizScore;
+        $("#quizProgressFill").style.width = (quizIndex / questions.length * 100) + "%";
+        $("#quizQuestion").textContent = question.question;
+        $("#quizDescription").textContent = "Select one answer.";
+        $("#quizFeedback").className = "quiz-feedback hidden";
+
+        $("#quizOptions").innerHTML = question.options.map((option, index) => `
+            <button type="button" class="quiz-option" data-answer="${index}">
+                <span class="option-letter">${String.fromCharCode(65 + index)}</span>
+                <span>${escapeHTML(option)}</span>
+            </button>
+        `).join("");
+
+        $("#quizNext").disabled = true;
+        $("#quizNext").textContent = "Check answer";
+    }
+
+    $("#quizOptions").addEventListener("click", function(event) {
+        const button = event.target.closest("[data-answer]");
+        if (!button || answered) return;
+
+        selectedAnswer = Number(button.dataset.answer);
+        $$(".quiz-option").forEach(option => option.classList.remove("selected"));
+        button.classList.add("selected");
+        $("#quizNext").disabled = false;
+    });
+
+    $("#quizNext").addEventListener("click", function() {
+        if (!answered) {
+            if (selectedAnswer === null) return;
+
+            answered = true;
+            const question = questions[quizOrder[quizIndex]];
+            const correct = selectedAnswer === question.answer;
+
+            if (correct) quizScore++;
+
+            $$(".quiz-option").forEach((option, index) => {
+                option.disabled = true;
+                if (index === question.answer) option.classList.add("correct");
+                if (index === selectedAnswer && !correct) option.classList.add("incorrect");
+            });
+
+            const feedback = $("#quizFeedback");
+            feedback.className = "quiz-feedback " +
+                (correct ? "correct-feedback" : "wrong-feedback");
+            feedback.innerHTML = `<strong>${correct ? "✓ Correct!" : "✕ Not quite."}</strong>
+                <p>${escapeHTML(question.explanation)}</p>`;
+            feedback.classList.remove("hidden");
+
+            $("#quizScoreText").textContent = "Score: " + quizScore;
+            $("#quizProgressFill").style.width =
+                ((quizIndex + 1) / questions.length * 100) + "%";
+
+            $("#quizNext").textContent =
+                quizIndex === questions.length - 1 ? "View results" : "Next question →";
+        } else if (quizIndex < questions.length - 1) {
+            quizIndex++;
+            renderQuestion();
+        } else {
+            finishQuiz();
+        }
+    });
+
+    function finishQuiz() {
+        const percentage = Math.round(quizScore / questions.length * 100);
+        const stats = loadQuizStats();
+        stats.best = Math.max(stats.best, percentage);
+        stats.latest = percentage;
+        stats.completed++;
+
+        saveQuizStats(stats);
+        renderQuizStats();
+
+        $("#quizContent").classList.add("hidden");
+        $("#quizFinished").classList.remove("hidden");
+        $("#quizFinalScore").textContent =
+            `You scored ${quizScore} out of ${questions.length} (${percentage}%).`;
+
+        $("#quizFinalMessage").textContent =
+            percentage >= 80 ? "Excellent work! You understand many key security principles."
+                : percentage >= 50 ? "Good effort! Review the explanations and practise again."
+                    : "Keep learning! Review the explanations and try the quiz again.";
+
+        $("#quizProgressText").textContent = "QUIZ COMPLETED";
+        $("#quizProgressFill").style.width = "100%";
+    }
+
+    function startQuiz() {
+        quizOrder = questions.map((_, index) => index);
+        // Fisher-Yates shuffle: each new attempt uses a shuffled question order.
+        for (let i = quizOrder.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [quizOrder[i], quizOrder[j]] = [quizOrder[j], quizOrder[i]];
+        }
+        quizIndex = 0;
+        quizScore = 0;
+        renderQuestion();
+    }
+
+    $("#restartQuiz").addEventListener("click", startQuiz);
+
+    // --------------------------------------------------
+    // START THE APPLICATION
+    // --------------------------------------------------
+
+    renderActivityChart();
+
+    // Store sample incidents on first launch.
+    if (localStorage.getItem(STORAGE_KEY) === null) {
+        saveIncidents();
+    }
+
+    renderIncidents();
+    renderQuizStats();
+    checkPassword();
+    startQuiz();
+});
