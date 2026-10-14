@@ -52,5 +52,4 @@ Do not use this demonstration as a substitute for production security controls.
 - Add automated testing and deployment workflows.
 
 ## Author
-
-Software Engineering Portfolio Project
+Shenaye Naidoo
